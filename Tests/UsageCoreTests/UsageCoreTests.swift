@@ -129,6 +129,67 @@ final class UsageClientTests: XCTestCase {
     }
     override func tearDown() { session.invalidateAndCancel(); StubProtocol.handler = nil }
 
+    /// Never touches the real Keychain or the machine's cached Claude Code token.
+    private let noClaudeCode = ClaudeCodeAuth(
+        credentialsURL: URL(fileURLWithPath: "/nonexistent/credentials.json"),
+        cacheURL: URL(fileURLWithPath: "/nonexistent/token.json"))
+
+    private func claudeCode(token: String, expiresIn seconds: Double) throws -> ClaudeCodeAuth {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        let expiresAt = (Date().timeIntervalSince1970 + seconds) * 1000
+        try JSONEncoder().encode(ClaudeCodeToken(accessToken: token, expiresAt: expiresAt)).write(to: url)
+        return ClaudeCodeAuth(credentialsURL: noClaudeCode.credentialsURL, cacheURL: url)
+    }
+
+    func testClaudeCodeLoginIsUsedAfterManualToken() async throws {
+        var tokens: [String?] = []
+        StubProtocol.handler = { request in
+            tokens.append(request.value(forHTTPHeaderField: "Authorization"))
+            return tokens.count == 1 ? (401, "{}") : (200, "{\"five_hour\":{\"utilization\":5}}")
+        }
+        let client = UsageClient(session: session, claudeCodeAuth: try claudeCode(token: "cc-test", expiresIn: 3600))
+        let result = await client.fetchClaude(WidgetConfig(oauthToken: "manual-test"))
+        XCTAssertEqual(tokens, ["Bearer manual-test", "Bearer cc-test"])
+        XCTAssertEqual(result.metrics.first?.percent, 5)
+
+        let disabled = await client.fetchClaude(WidgetConfig(claudeCodeEnabled: false))
+        XCTAssertEqual(disabled.error, UsageError.missingClaude.localizedDescription)
+        XCTAssertEqual(tokens.count, 2)
+    }
+
+    func testExpiredClaudeCodeLoginIsNotSentAndFallsBackToSessionKey() async throws {
+        StubProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "claude.ai")
+            return (200, "{\"five_hour\":{\"utilization\":7}}")
+        }
+        let client = UsageClient(session: session, claudeCodeAuth: try claudeCode(token: "old", expiresIn: -60))
+        let fallback = await client.fetchClaude(WidgetConfig(
+            sessionKey: "session-test", organizationId: "11111111-1111-1111-1111-111111111111"))
+        XCTAssertEqual(fallback.metrics.first?.percent, 7)
+        let expired = await client.fetchClaude(WidgetConfig())
+        XCTAssertEqual(expired.error, UsageError.claudeCodeExpired.localizedDescription)
+    }
+
+    func testSessionKeyDetectsSubscriptionOrganization() async {
+        StubProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "sessionKey=session-test")
+            if request.url?.path == "/api/organizations" {
+                return (200, """
+                [{"uuid":"22222222-2222-2222-2222-222222222222","capabilities":["api"]},
+                 {"uuid":"not-a-uuid","capabilities":["chat","claude_max"]},
+                 {"uuid":"33333333-3333-3333-3333-333333333333","capabilities":["chat","claude_max"]}]
+                """)
+            }
+            XCTAssertEqual(request.url?.path, "/api/organizations/33333333-3333-3333-3333-333333333333/usage")
+            return (200, "{\"five_hour\":{\"utilization\":9}}")
+        }
+        let result = await UsageClient(session: session, claudeCodeAuth: noClaudeCode)
+            .fetchClaude(WidgetConfig(sessionKey: "session-test"))
+        XCTAssertEqual(result.metrics.first?.percent, 9)
+        XCTAssertThrowsError(try UsageParser.organization(Data("[{\"uuid\":\"22222222-2222-2222-2222-222222222222\",\"capabilities\":[\"api\"]}]".utf8)))
+    }
+
     func testClaudeFailureDoesNotHideCodexAndAuthGoesToCorrectHost() async {
         StubProtocol.handler = { request in
             if request.url?.host == "api.anthropic.com" {
@@ -141,7 +202,7 @@ final class UsageClientTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "ChatGPT-Account-Id"), "account-test")
             return (200, "{\"rate_limit\":{\"primary_window\":{\"used_percent\":10,\"limit_window_seconds\":18000}}}")
         }
-        let result = await UsageClient(session: session).fetch(config: WidgetConfig(
+        let result = await UsageClient(session: session, claudeCodeAuth: noClaudeCode).fetch(config: WidgetConfig(
             oauthToken: "claude-test", codexAccessToken: "codex-test", codexAccountId: "account-test"))
         XCTAssertNotNil(result.claude.error)
         XCTAssertNil(result.codex.error)
@@ -156,7 +217,7 @@ final class UsageClientTests: XCTestCase {
             XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
             return (200, "{\"five_hour\":{\"utilization\":22.2}}")
         }
-        let result = await UsageClient(session: session).fetch(config: WidgetConfig(
+        let result = await UsageClient(session: session, claudeCodeAuth: noClaudeCode).fetch(config: WidgetConfig(
             sessionKey: "session-test", organizationId: "11111111-1111-1111-1111-111111111111",
             oauthToken: "expired-test", codexEnabled: false))
         XCTAssertNil(result.claude.error)
@@ -167,7 +228,7 @@ final class UsageClientTests: XCTestCase {
     func testCodexRereadsRotatedLocalAuthAndRejectsAPIKeyOnly() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: url) }
-        let client = UsageClient(session: session, codexAuthURL: url)
+        let client = UsageClient(session: session, codexAuthURL: url, claudeCodeAuth: noClaudeCode)
         for token in ["first-token", "rotated-token"] {
             try Data("{\"tokens\":{\"access_token\":\"\(token)\",\"account_id\":\"test\"}}".utf8).write(to: url)
             StubProtocol.handler = { request in
@@ -185,7 +246,7 @@ final class UsageClientTests: XCTestCase {
 
     func testRateLimitErrorAndInvalidOrganization() async {
         StubProtocol.handler = { _ in (429, "{}") }
-        let client = UsageClient(session: session)
+        let client = UsageClient(session: session, claudeCodeAuth: noClaudeCode)
         let result = await client.fetchCodex(WidgetConfig(codexAccessToken: "test"))
         XCTAssertEqual(result.error, UsageError.http(429).localizedDescription)
         let invalid = await client.fetchClaude(WidgetConfig(sessionKey: "test", organizationId: "../wrong?query"))

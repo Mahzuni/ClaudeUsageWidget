@@ -11,6 +11,22 @@ enum ConfigLocation {
     }
     static var url: URL { home.appendingPathComponent(".claude/claude-usage-widget.json") }
     static var codexAuthURL: URL { home.appendingPathComponent(".codex/auth.json") }
+    static var claudeCodeCredentialsURL: URL { home.appendingPathComponent(".claude/.credentials.json") }
+    /// The host app's copy of Claude Code's short-lived access token, for the sandboxed widget.
+    static var claudeCodeTokenURL: URL { home.appendingPathComponent(".claude/claude-usage-widget-token.json") }
+}
+
+/// Atomically writes owner-only (0600) data.
+func writePrivately(_ data: Data, to url: URL) throws {
+    let directory = url.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let temporary = directory.appendingPathComponent(".usage-config-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    guard FileManager.default.createFile(atPath: temporary.path, contents: data,
+                                         attributes: [.posixPermissions: 0o600]) else {
+        throw CocoaError(.fileWriteUnknown)
+    }
+    guard rename(temporary.path, url.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
 }
 
 struct WidgetConfig: Codable, Sendable {
@@ -18,6 +34,7 @@ struct WidgetConfig: Codable, Sendable {
     var organizationId: String?
     var oauthToken: String?
     var claudeEnabled: Bool?
+    var claudeCodeEnabled: Bool?
     var codexEnabled: Bool?
     var codexAccessToken: String?
     var codexAccountId: String?
@@ -36,23 +53,14 @@ struct WidgetConfig: Codable, Sendable {
             }
             json = existing
         }
-        let fields = ["sessionKey", "organizationId", "oauthToken", "claudeEnabled",
+        let fields = ["sessionKey", "organizationId", "oauthToken", "claudeEnabled", "claudeCodeEnabled",
                       "codexEnabled", "codexAccessToken", "codexAccountId"]
         fields.forEach { json.removeValue(forKey: $0) }
         guard let values = try JSONSerialization.jsonObject(with: JSONEncoder().encode(self)) as? [String: Any] else {
             throw UsageError.invalidConfig
         }
         json.merge(values) { _, new in new }
-        let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
-        let directory = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let temporary = directory.appendingPathComponent(".usage-config-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        guard FileManager.default.createFile(atPath: temporary.path, contents: data,
-                                             attributes: [.posixPermissions: 0o600]) else {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        guard rename(temporary.path, url.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        try writePrivately(JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]), to: url)
     }
 }
 
@@ -147,6 +155,21 @@ enum UsageParser {
         return ProviderUsage(name: "Claude", metrics: metrics)
     }
 
+    /// Picks the subscription organization from claude.ai's organization list.
+    static func organization(_ data: Data) throws -> String {
+        guard let organizations = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw UsageError.invalidResponse
+        }
+        let valid = organizations.filter { ($0["uuid"] as? String).flatMap(UUID.init(uuidString:)) != nil }
+        func has(_ capability: @escaping (String) -> Bool) -> ([String: Any]) -> Bool {
+            { ($0["capabilities"] as? [String] ?? []).contains(where: capability) }
+        }
+        // Prefer a paid Claude plan, then any chat organization; API-only organizations have no usage limits.
+        let chosen = valid.first(where: has { $0.hasPrefix("claude_") }) ?? valid.first(where: has { $0 == "chat" })
+        guard let uuid = chosen?["uuid"] as? String else { throw UsageError.noOrganization }
+        return uuid
+    }
+
     static func codex(_ data: Data) throws -> ProviderUsage {
         let json = try object(data)
         let rate = json["rate_limit"] as? [String: Any] ?? [:]
@@ -172,6 +195,7 @@ enum UsageParser {
 
 enum UsageError: LocalizedError {
     case invalidResponse, noLimits, http(Int), missingClaude, missingCodex, invalidConfig
+    case claudeCodeExpired, noOrganization
 
     var errorDescription: String? {
         switch self {
@@ -181,7 +205,9 @@ enum UsageError: LocalizedError {
         case .http(403): return "Access denied. Check login and account permissions."
         case .http(429): return "Rate limited. Wait for the next refresh."
         case .http(let code): return "Usage service returned HTTP \(code)."
-        case .missingClaude: return "Add Claude credentials in the app."
+        case .missingClaude: return "Sign in to Claude Code, or add Claude credentials in the app."
+        case .claudeCodeExpired: return "Claude Code login expired. Open Claude Code to renew it."
+        case .noOrganization: return "No Claude subscription organization found for this session key."
         case .missingCodex: return "Sign in with Codex CLI, or add a token in the app."
         case .invalidConfig: return "Cannot read configuration. Open the app to fix it."
         }

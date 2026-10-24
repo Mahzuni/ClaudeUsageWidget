@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var organizationId = ""
     @State private var oauthToken = ""
     @State private var claudeEnabled = true
+    @State private var claudeCodeEnabled = true
     @State private var codexEnabled = true
     @State private var codexAccessToken = ""
     @State private var codexAccountId = ""
@@ -48,10 +49,17 @@ struct ContentView: View {
                         Toggle("Show Claude and Fable", isOn: $claudeEnabled)
                         Text("Fable's weekly limit is read with your Claude usage; no extra token is needed.")
                             .font(.caption).foregroundStyle(.secondary)
-                        SecureField("Claude OAuth Bearer Token (preferred)", text: $oauthToken)
-                        Text("Or use a browser session key:").font(.caption).foregroundStyle(.secondary)
-                        SecureField("Session Key (sk-ant-sid01-…)", text: $sessionKey)
-                        TextField("Organization ID (UUID)", text: $organizationId)
+                        Toggle("Use Claude Code login", isOn: $claudeCodeEnabled)
+                        Text("Automatically reads the Claude Code login from the Keychain; macOS asks once for access. Claude Code renews it while running. Sign in with Claude Code first.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        DisclosureGroup("Manual credentials (fallback)") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                SecureField("Claude OAuth Bearer Token (overrides Claude Code login)", text: $oauthToken)
+                                Text("Or use a browser session key:").font(.caption).foregroundStyle(.secondary)
+                                SecureField("Session Key (sk-ant-sid01-…)", text: $sessionKey)
+                                TextField("Organization ID (detected automatically)", text: $organizationId)
+                            }.padding(.top, 8)
+                        }
                     }
                     .textFieldStyle(.roundedBorder)
                     .padding(8)
@@ -83,7 +91,7 @@ struct ContentView: View {
                     Text(statusMessage).font(.caption).foregroundStyle(isSuccess ? .green : .red)
                 }
                 HStack {
-                    Button("Save & Refresh") { saveConfig() }
+                    Button("Save & Refresh") { Task { await saveConfig() } }
                         .buttonStyle(.borderedProminent)
                         .disabled(isRefreshing)
                     Button("Load Existing") { loadConfig() }
@@ -104,24 +112,32 @@ struct ContentView: View {
     private var config: WidgetConfig {
         WidgetConfig(sessionKey: sessionKey.nonempty, organizationId: organizationId.nonempty,
                      oauthToken: oauthToken.nonempty, claudeEnabled: claudeEnabled,
-                     codexEnabled: codexEnabled, codexAccessToken: codexAccessToken.nonempty,
+                     claudeCodeEnabled: claudeCodeEnabled, codexEnabled: codexEnabled, codexAccessToken: codexAccessToken.nonempty,
                      codexAccountId: codexAccountId.nonempty)
     }
 
-    private func saveConfig() {
-        if claudeEnabled, sessionKey.nonempty != nil,
-           UUID(uuidString: organizationId.trimmingCharacters(in: .whitespacesAndNewlines)) == nil {
-            statusMessage = "Enter a valid Claude organization UUID for the session key."
-            isSuccess = false
-            return
+    private func saveConfig() async {
+        if claudeEnabled, let key = sessionKey.nonempty {
+            if organizationId.nonempty == nil {
+                do { organizationId = try await UsageClient.hostApp.organization(sessionKey: key) } catch {
+                    statusMessage = "Cannot detect the Claude organization: \(error.localizedDescription)"
+                    isSuccess = false
+                    return
+                }
+            } else if UUID(uuidString: organizationId.trimmingCharacters(in: .whitespacesAndNewlines)) == nil {
+                statusMessage = "Enter a valid Claude organization UUID, or leave it empty to detect it."
+                isSuccess = false
+                return
+            }
         }
         do {
             try config.save()
             WidgetCenter.shared.reloadTimelines(ofKind: "ClaudeUsageWidget")
             statusMessage = "Configuration saved. Widget refresh requested."
             isSuccess = true
-            Task { await refresh() }
-            Task { await UsageStore.shared.refresh() }
+            // Sequential, so a first Keychain access shows only one prompt.
+            await refresh()
+            await UsageStore.shared.refresh()
         } catch {
             statusMessage = "Failed to save: \(error.localizedDescription)"
             isSuccess = false
@@ -136,6 +152,7 @@ struct ContentView: View {
             organizationId = config.organizationId ?? ""
             oauthToken = config.oauthToken ?? ""
             claudeEnabled = config.claudeEnabled != false
+            claudeCodeEnabled = config.claudeCodeEnabled != false
             codexEnabled = config.codexEnabled != false
             codexAccessToken = config.codexAccessToken ?? ""
             codexAccountId = config.codexAccountId ?? ""
@@ -152,7 +169,7 @@ struct ContentView: View {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
-        snapshot = await UsageClient().fetch(config: config)
+        snapshot = await UsageClient.hostApp.fetch(config: config)
     }
 }
 

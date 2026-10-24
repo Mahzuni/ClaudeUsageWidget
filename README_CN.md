@@ -27,7 +27,7 @@ macOS 桌面小组件（WidgetKit），同时监控你的 Claude、Claude Fable 
 - **颜色随用量变化** 绿 → 黄 → 橙 → 红
 - **三种尺寸** small、medium、large
 - **可选菜单栏显示** 文字、迷你进度条或圆环；带刘海的 Mac 显示在刘海旁
-- **双重认证** OAuth token 或 session key
+- **自动 Claude 登录** 使用 Claude Code 的登录；OAuth token 或 session key 作为备选
 - **自动刷新** 每 5 分钟请求更新，实际调度由 macOS 决定
 - **原创应用图标** 随项目按 MIT 许可提供，无第三方图标素材
 
@@ -44,7 +44,7 @@ macOS 桌面小组件（WidgetKit），同时监控你的 Claude、Claude Fable 
 1. git clone https://github.com/dependentsign/ClaudeUsageWidget.git ~/Documents/ClaudeUsageWidget
 2. 构建并打包：cd ~/Documents/ClaudeUsageWidget && ./scripts/build-local.sh
 3. 解压 build/ClaudeUsageWidget-1.1.zip，退出旧应用后将 ClaudeUsageWidget.app 复制到 /Applications
-4. 打开应用，在配置界面填写我的 Claude OAuth token，或 session key 和组织 UUID；已有配置直接沿用
+4. 打开应用，默认自动使用我的 Claude Code 登录（首次需允许钥匙串访问），否则填写 OAuth token 或 session key；已有配置直接沿用
 5. Codex 使用 ChatGPT 登录后，应用默认自动读取 ~/.codex/auth.json
 6. 点击 Save & Refresh
 7. 告诉我右键桌面 → 编辑小组件 → 搜索 "Claude" 或 "Codex" 添加
@@ -73,9 +73,13 @@ open ClaudeUsageWidget.xcodeproj
 
 ### 2. 配置凭证
 
-打开应用填写并保存，或创建配置文件 `~/.claude/claude-usage-widget.json`。Fable 沿用 Claude 凭证，无需单独设置：
+打开应用填写并保存，或创建配置文件 `~/.claude/claude-usage-widget.json`。Fable 沿用 Claude 凭证，无需单独设置。应用依次尝试手动 OAuth token、Claude Code 登录、session key。
 
-**方式 A：OAuth Token（推荐）**
+**Claude Code 登录（默认自动读取）**
+
+登录 Claude Code 后，应用从 macOS 钥匙串读取其登录信息；首次访问 macOS 会询问一次（选择 **始终允许**；ad-hoc 签名的版本每次更新后会再次询问）。Claude Code 运行时会自动续期 token；应用不会刷新或修改 Claude Code 的登录，若提示登录过期请打开 Claude Code。沙盒中的小组件无法读取钥匙串，因此应用在每次刷新时将当前短期 token 写入 `~/.claude/claude-usage-widget-token.json`（`0600`）。设置 `"claudeCodeEnabled": false` 可关闭此功能并删除该文件。
+
+**方式 A：OAuth Token**
 ```json
 {
   "oauthToken": "你的-oauth-bearer-token"
@@ -85,22 +89,18 @@ open ClaudeUsageWidget.xcodeproj
 **方式 B：Session Key**
 ```json
 {
-  "sessionKey": "sk-ant-sid01-...",
-  "organizationId": "你的-org-uuid"
+  "sessionKey": "sk-ant-sid01-..."
 }
 ```
+
+`organizationId` 可省略：应用会自动识别订阅组织，并在保存时填入。
 
 <details>
 <summary>如何获取 session key</summary>
 
 1. 打开 [claude.ai](https://claude.ai) 并登录
 2. 开发者工具（F12）→ Application → Cookies → 复制 `sessionKey`
-3. 获取组织 ID：
-```bash
-curl -s https://claude.ai/api/organizations \
-  -H "Cookie: sessionKey=你的KEY" | python3 -m json.tool
-```
-选择你正在使用的订阅组织，复制它的 **`uuid`** 字段，不是数字 `id` 或 `parent_organization_uuid`。
+3. 粘贴到应用中并点击 **Save & Refresh**。如需使用其他组织，可填写 `https://claude.ai/api/organizations` 中对应的 **`uuid`**（不是数字 `id`）。
 
 </details>
 
@@ -149,6 +149,7 @@ curl -s https://claude.ai/api/organizations \
 |------|------|
 | OAuth | `GET https://api.anthropic.com/api/oauth/usage` |
 | Session Key | `GET https://claude.ai/api/organizations/{orgId}/usage` |
+| 组织识别 | `GET https://claude.ai/api/organizations` |
 | Codex | `GET https://chatgpt.com/backend-api/wham/usage` |
 
 返回数据：

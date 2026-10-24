@@ -27,7 +27,7 @@ A macOS desktop widget (WidgetKit) that monitors Claude, Claude Fable, and Codex
 - **Color-coded** green → yellow → orange → red
 - **Three widget sizes** — small, medium, large
 - **Optional menu bar display** — text, mini bars or rings, next to the notch on notched Macs
-- **Dual auth** — OAuth token or session key
+- **Automatic Claude login** — uses your Claude Code login; OAuth token or session key as fallback
 - **Auto-refresh** requested every 5 minutes; macOS controls actual scheduling
 - **Original app icon** included under MIT, with no third-party icon assets
 
@@ -44,7 +44,7 @@ Steps:
 1. git clone https://github.com/dependentsign/ClaudeUsageWidget.git ~/Documents/ClaudeUsageWidget
 2. Build and package: cd ~/Documents/ClaudeUsageWidget && ./scripts/build-local.sh
 3. Extract build/ClaudeUsageWidget-1.1.zip, quit the old app, and copy ClaudeUsageWidget.app to /Applications
-4. Open the app and enter my Claude OAuth token, or session key and organization UUID; keep existing settings if present
+4. Open the app; it uses my Claude Code login automatically (allow Keychain access once), otherwise enter an OAuth token or session key; keep existing settings if present
 5. For Codex, sign in with a ChatGPT account in Codex CLI; the app reads ~/.codex/auth.json automatically
 6. Click Save & Refresh
 7. Tell me to right-click desktop → Edit Widgets → search "Claude" or "Codex" to add it
@@ -73,9 +73,13 @@ Alternatively, run `./scripts/build-local.sh` to produce `build/ClaudeUsageWidge
 
 ### 2. Configure Credentials
 
-Enter and save credentials in the app, or create `~/.claude/claude-usage-widget.json`. Fable uses the same Claude credentials:
+Enter and save credentials in the app, or create `~/.claude/claude-usage-widget.json`. Fable uses the same Claude credentials. The app tries a manual OAuth token first, then the Claude Code login, then a session key.
 
-**Option A: OAuth Token (recommended)**
+**Claude Code login (automatic by default)**
+
+Sign in to Claude Code. The app reads its login from the macOS Keychain; macOS asks once for access (choose **Always Allow**; ad-hoc signed builds ask again after each update). Claude Code renews the token while it runs; the app never refreshes or modifies Claude Code's login, so open Claude Code if the widget reports an expired login. The sandboxed widget cannot read the Keychain, so the app shares the current short-lived token in `~/.claude/claude-usage-widget-token.json` (`0600`), updated whenever the app refreshes. Set `"claudeCodeEnabled": false` to turn this off and remove that file.
+
+**Option A: OAuth Token**
 ```json
 {
   "oauthToken": "your-oauth-bearer-token"
@@ -85,22 +89,18 @@ Enter and save credentials in the app, or create `~/.claude/claude-usage-widget.
 **Option B: Session Key**
 ```json
 {
-  "sessionKey": "sk-ant-sid01-...",
-  "organizationId": "your-org-uuid"
+  "sessionKey": "sk-ant-sid01-..."
 }
 ```
+
+`organizationId` is optional: the app detects your subscription organization and fills it in on save.
 
 <details>
 <summary>How to get session key</summary>
 
 1. Open [claude.ai](https://claude.ai) and log in
 2. DevTools (F12) → Application → Cookies → copy `sessionKey`
-3. Get org ID:
-```bash
-curl -s https://claude.ai/api/organizations \
-  -H "Cookie: sessionKey=YOUR_KEY" | python3 -m json.tool
-```
-Select the subscription organization you use and copy its **`uuid`**, not the numeric `id` or `parent_organization_uuid`.
+3. Paste it into the app and click **Save & Refresh**. To use a different organization, enter its **`uuid`** from `https://claude.ai/api/organizations` (not the numeric `id`).
 
 </details>
 
@@ -151,6 +151,7 @@ The widget calls each provider's usage endpoint:
 |--------|----------|
 | OAuth | `GET https://api.anthropic.com/api/oauth/usage` |
 | Session Key | `GET https://claude.ai/api/organizations/{orgId}/usage` |
+| Organization detection | `GET https://claude.ai/api/organizations` |
 | Codex | `GET https://chatgpt.com/backend-api/wham/usage` |
 
 Returns:

@@ -76,8 +76,13 @@ final class UsageStore: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         let config = (try? WidgetConfig.load()) ?? WidgetConfig()
-        snapshot = await UsageClient().fetch(config: config)
+        snapshot = await UsageClient.hostApp.fetch(config: config)
     }
+}
+
+extension UsageClient {
+    /// The host app may read Claude Code's login from the Keychain and share it with the widget.
+    static var hostApp: UsageClient { UsageClient(claudeCodeAuth: ClaudeCodeAuth(readsKeychain: true)) }
 }
 
 struct MenuBarPanel: View {
