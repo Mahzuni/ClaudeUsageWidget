@@ -45,6 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(enabled ? .accessory : .regular)
         if enabled { Task { await UsageStore.shared.refresh() } }
     }
+
+    // SwiftUI otherwise quits once the last window closes, and the menu bar panel
+    // counts as one: closing the panel or the settings window would quit the app.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
 @MainActor
