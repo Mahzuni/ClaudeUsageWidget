@@ -4,10 +4,12 @@ import ServiceManagement
 
 @main
 struct ClaudeUsageWidgetApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = UsageStore.shared
+    @AppStorage(MenuBarKeys.enabled) private var showInMenuBar = false
 
     var body: some Scene {
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $showInMenuBar) {
             MenuBarPanel().environmentObject(store)
         } label: {
             MenuBarLabel(store: store)
@@ -17,8 +19,31 @@ struct ClaudeUsageWidgetApp: App {
         Window("Claude & Codex Usage", id: "settings") {
             ContentView()
         }
-        // Menu bar app: only show settings on launch until credentials are configured.
-        .defaultLaunchBehavior(UsageStore.hasConfig ? .suppressed : .presented)
+        // In menu bar mode, only show settings on launch until credentials are configured.
+        .defaultLaunchBehavior(MenuBarMode.isEnabled && UsageStore.hasConfig ? .suppressed : .presented)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var menuBarEnabled = MenuBarMode.isEnabled
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(menuBarEnabled ? .accessory : .regular)
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.menuBarModeChanged() }
+        }
+    }
+
+    // Hide the Dock icon while the menu bar item is shown, including when it is
+    // removed by Command-dragging it out of the menu bar.
+    @MainActor private func menuBarModeChanged() {
+        let enabled = MenuBarMode.isEnabled
+        guard enabled != menuBarEnabled else { return }
+        menuBarEnabled = enabled
+        NSApp.setActivationPolicy(enabled ? .accessory : .regular)
+        if enabled { Task { await UsageStore.shared.refresh() } }
     }
 }
 
@@ -33,14 +58,16 @@ final class UsageStore: ObservableObject {
     private init() {
         Task {
             while !Task.isCancelled {
-                await refresh()
+                if MenuBarMode.isEnabled { await refresh() }
                 try? await Task.sleep(for: .seconds(300))
             }
         }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { _ in
-            Task { @MainActor in await UsageStore.shared.refresh() }
+            Task { @MainActor in
+                if MenuBarMode.isEnabled { await UsageStore.shared.refresh() }
+            }
         }
     }
 
@@ -57,10 +84,6 @@ struct MenuBarPanel: View {
     @EnvironmentObject private var store: UsageStore
     @Environment(\.openWindow) private var openWindow
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
-    @AppStorage(MenuBarKeys.style) private var style = MenuBarStyle.rings
-    @AppStorage(MenuBarKeys.metrics) private var metrics = MenuBarMetrics.session
-    @AppStorage(MenuBarKeys.showPercent) private var showPercent = true
-    @AppStorage(MenuBarKeys.colored) private var colored = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -70,20 +93,7 @@ struct MenuBarPanel: View {
                 ProgressView().frame(maxWidth: .infinity)
             }
             Divider()
-            Text("Menu bar").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Picker("Style", selection: $style) {
-                ForEach(MenuBarStyle.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            Picker("Values", selection: $metrics) {
-                ForEach(MenuBarMetrics.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            HStack {
-                Toggle("Percent", isOn: $showPercent)
-                Toggle("Colored", isOn: $colored)
-            }
-            .disabled(style == .text)
+            MenuBarSettingsView()
             Divider()
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { _, enabled in setLaunchAtLogin(enabled) }

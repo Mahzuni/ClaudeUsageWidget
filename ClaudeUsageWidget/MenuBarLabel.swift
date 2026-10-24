@@ -34,10 +34,55 @@ enum MenuBarMetrics: String, CaseIterable, Identifiable {
 }
 
 enum MenuBarKeys {
+    static let enabled = "menuBarEnabled"
     static let style = "menuBarStyle"
     static let metrics = "menuBarMetrics"
     static let showPercent = "menuBarShowPercent"
     static let colored = "menuBarColored"
+}
+
+enum MenuBarMode {
+    /// Opt-in: off by default, so the app keeps its regular window and Dock icon.
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: MenuBarKeys.enabled) }
+}
+
+struct MenuBarSettingsView: View {
+    @Environment(\.openWindow) private var openWindow
+    @AppStorage(MenuBarKeys.enabled) private var enabled = false
+    @AppStorage(MenuBarKeys.style) private var style = MenuBarStyle.rings
+    @AppStorage(MenuBarKeys.metrics) private var metrics = MenuBarMetrics.session
+    @AppStorage(MenuBarKeys.showPercent) private var showPercent = true
+    @AppStorage(MenuBarKeys.colored) private var colored = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("Show in menu bar", isOn: Binding(get: { enabled }, set: { newValue in
+                enabled = newValue
+                // Keep the app reachable once the menu bar item is gone.
+                if !newValue {
+                    NSApp.activate()
+                    openWindow(id: "settings")
+                }
+            }))
+            if enabled {
+                Text("Runs from the menu bar without a Dock icon.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Picker("Style", selection: $style) {
+                    ForEach(MenuBarStyle.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Picker("Values", selection: $metrics) {
+                    ForEach(MenuBarMetrics.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                HStack {
+                    Toggle("Percent", isOn: $showPercent)
+                    Toggle("Colored", isOn: $colored)
+                }
+                .disabled(style == .text)
+            }
+        }
+    }
 }
 
 struct MenuBarItem {

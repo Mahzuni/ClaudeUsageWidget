@@ -75,6 +75,10 @@ struct ContentView: View {
                     .padding(8)
                 } label: { Text("Codex").fontWeight(.semibold) }
 
+                GroupBox {
+                    MenuBarSettingsView().padding(8)
+                } label: { Text("Menu bar").fontWeight(.semibold) }
+
                 if !statusMessage.isEmpty {
                     Text(statusMessage).font(.caption).foregroundStyle(isSuccess ? .green : .red)
                 }

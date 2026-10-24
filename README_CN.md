@@ -26,6 +26,7 @@ macOS 桌面小组件（WidgetKit），同时监控你的 Claude、Claude Fable 
 - **重置倒计时**
 - **颜色随用量变化** 绿 → 黄 → 橙 → 红
 - **三种尺寸** small、medium、large
+- **可选菜单栏显示** 文字、迷你进度条或圆环；带刘海的 Mac 显示在刘海旁
 - **双重认证** OAuth token 或 session key
 - **自动刷新** 每 5 分钟请求更新，实际调度由 macOS 决定
 - **原创应用图标** 随项目按 MIT 许可提供，无第三方图标素材
@@ -124,6 +125,19 @@ curl -s https://claude.ai/api/organizations \
 1. 右键桌面 → **编辑小组件**
 2. 搜索 **"Claude"** 或 **"Codex"**
 3. 选择尺寸并添加
+
+### 4. 菜单栏（可选）
+
+在应用中打开 **Show in menu bar**，用量会以紧凑形式显示在菜单栏，应用不再显示 Dock 图标。点击菜单栏项可查看完整仪表板、刷新、打开设置及设置登录时启动。
+
+- **Style：** 文字、进度条或圆环
+- **Values：** 5 小时、每周或两者（叠放进度条；嵌套圆环，外圈为 5 小时）
+- **Percent：** 在图形旁显示百分比
+- **Colored：** 按用量着色，或单色以匹配系统菜单栏图标
+
+![菜单栏样式](screenshots/menu-bar-preview.png)
+
+关闭该选项即恢复普通窗口和 Dock 图标；按住 Command 将菜单栏项拖出也会关闭。
 
 ---
 

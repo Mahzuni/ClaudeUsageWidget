@@ -26,6 +26,7 @@ A macOS desktop widget (WidgetKit) that monitors Claude, Claude Fable, and Codex
 - **Reset countdown** for both windows
 - **Color-coded** green → yellow → orange → red
 - **Three widget sizes** — small, medium, large
+- **Optional menu bar display** — text, mini bars or rings, next to the notch on notched Macs
 - **Dual auth** — OAuth token or session key
 - **Auto-refresh** requested every 5 minutes; macOS controls actual scheduling
 - **Original app icon** included under MIT, with no third-party icon assets
@@ -124,6 +125,21 @@ Existing configuration remains compatible. `claudeEnabled` / `codexEnabled` togg
 1. Right-click desktop → **Edit Widgets...**
 2. Search **"Claude"** or **"Codex"**
 3. Choose size and add
+
+### 4. Menu Bar (optional)
+
+Turn on **Show in menu bar** in the app. Usage then appears as a compact menu bar item, and the app runs without a Dock icon. Click the item for the full dashboard, refresh, settings and launch at login.
+
+- **Style:** text, bars or rings
+- **Values:** 5h session, weekly, or both (stacked bars, nested rings with 5h outside)
+- **Percent:** show the number next to the gauge
+- **Colored:** usage colors, or monochrome to match system menu bar icons
+
+![Menu bar styles](screenshots/menu-bar-preview.png)
+
+*Bars and rings, colored and monochrome. Monochrome items are tinted by macOS in the real menu bar.*
+
+Turn the option off in the panel or app to return to the regular window and Dock icon. Command-dragging the item out of the menu bar also turns it off.
 
 ---
 
