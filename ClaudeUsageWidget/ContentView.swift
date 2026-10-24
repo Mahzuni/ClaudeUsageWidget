@@ -117,6 +117,7 @@ struct ContentView: View {
             statusMessage = "Configuration saved. Widget refresh requested."
             isSuccess = true
             Task { await refresh() }
+            Task { await UsageStore.shared.refresh() }
         } catch {
             statusMessage = "Failed to save: \(error.localizedDescription)"
             isSuccess = false
